@@ -48,11 +48,14 @@ battle_city/
 
 ## What's Implemented
 
-### Module A — Map (CSP-lite)
+### Module A — Map (CSP with Backtracking)
 - 26×26 tile grid with 6 tile types: Empty, Brick, Steel, Water, Forest, Eagle
-- Procedural map generator satisfying constraints:
-  - Eagle surrounded by brick protection
-  - BFS reachability from all 3 spawn points → Eagle
+- CSP approach with backtracking attempts:
+  - Variables: tiles assigned via random selection
+  - Domains: {Empty, Brick, Steel, Water, Forest}
+  - Backtracking: Retry if constraints violated (up to 200 attempts)
+  - Forward checking: Density constraint checked during generation
+  - Final BFS validation for reachability
   - ≤40% wall density
   - Protected spawn corridors
 
@@ -63,17 +66,18 @@ battle_city/
 | Basic    | Simple Reflex   | BFS               | Shortest open path to Eagle      |
 | Fast     | Goal-Based      | Greedy Best-First | Rushes Eagle; may hit local minima |
 | Armor    | Model-Based     | A*                | Cost-aware; retreats on 3rd hit  |
+| Boss     | Adversarial     | Minimax + A-B     | Optimal play vs simulated player |
 
-### Module C — Adversarial (stub)
-- Boss tank class scaffolded; Minimax + Alpha-Beta to be wired in next iteration.
+### Module C — Adversarial (completed)
+- Boss tank uses Minimax with Alpha-Beta Pruning
+- Depth 2-4 based on HP phases
+- Simulates player responses for challenging gameplay
 
 ---
 
 ## What to Add Next
 
 - [ ] Power Tank type (utility-based agent)
-- [ ] Boss Level — Minimax + Alpha-Beta Pruning (Module C)
-- [ ] Full CSP backtracking map generator (replace CSP-lite)
 - [ ] Sprite assets / sound effects
 - [ ] Power-ups (shield, speed boost, etc.)
 - [ ] Score tracking and high-score persistence

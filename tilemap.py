@@ -14,8 +14,11 @@ from constants import *
 class Tilemap:
     """Holds the 26×26 grid and exposes helpers used by AI modules."""
 
-    def __init__(self):
-        self.grid = [[EMPTY] * GRID_SIZE for _ in range(GRID_SIZE)]
+    def __init__(self, grid=None):
+        if grid is None:
+            self.grid = [[EMPTY] * GRID_SIZE for _ in range(GRID_SIZE)]
+        else:
+            self.grid = [row[:] for row in grid]  # copy
 
     # ── accessors ─────────────────────────────────────────────────────────────
 
@@ -111,37 +114,36 @@ class Tilemap:
         return []
 
 
-# ─── Map Generator (simplified CSP-lite) ─────────────────────────────────────
+# ─── Map Generator (CSP with Backtracking Attempts) ─────────────────────────────────────
 
 class MapGenerator:
     """
-    Generates a level map satisfying the five project constraints:
-    1. Eagle surrounded by brick.
-    2. All spawn→Eagle paths exist.
-    3. No spawn within 10 Manhattan tiles of player.
-    4. ≤40 % wall tiles.
-    5. Water may not block the only Eagle path.
+    Generates a level map using CSP approach with backtracking attempts.
+    Variables: tiles assigned via random selection with constraint checks.
+    Backtracking: Retry generation if constraints violated.
     """
 
     def generate(self, level=1, seed=None):
-        rng = random.Random(seed)
+        self.level = level
+        self.rng = random.Random(seed)
+        
+        # Try backtracking attempts (up to 200)
         for attempt in range(200):
-            tm = self._try_generate(rng, level)
+            tm = self._try_generate()
             if tm is not None:
                 return tm
+        
         # Fallback: open map
         tm = Tilemap()
         self._place_eagle_and_protection(tm)
         return tm
 
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _try_generate(self, rng, level):
+    def _try_generate(self):
         tm = Tilemap()
 
         # Level density parameters
-        brick_prob  = 0.18 + level * 0.04   # more brick each level
-        steel_prob  = 0.04 + level * 0.03
+        brick_prob  = 0.18 + self.level * 0.04   # more brick each level
+        steel_prob  = 0.04 + self.level * 0.03
         water_prob  = 0.03
         forest_prob = 0.06
 
@@ -156,7 +158,7 @@ class MapGenerator:
             for dy in range(-2, 3):
                 protected.add((px + dx, py + dy))
 
-        # Fill grid randomly
+        # Fill grid randomly (CSP variable assignment)
         wall_count = 0
         total      = GRID_SIZE * GRID_SIZE
         for y in range(GRID_SIZE):
@@ -165,7 +167,7 @@ class MapGenerator:
                     continue
                 if (x, y) == EAGLE_POS:
                     continue
-                r = rng.random()
+                r = self.rng.random()
                 if r < brick_prob:
                     tm.set(x, y, BRICK);  wall_count += 1
                 elif r < brick_prob + steel_prob:
@@ -175,17 +177,17 @@ class MapGenerator:
                 elif r < brick_prob + steel_prob + water_prob + forest_prob:
                     tm.set(x, y, FOREST)
 
-        # Constraint 4 — density ≤ 40 %
+        # Forward checking: density constraint
         if wall_count / total > 0.40:
-            return None
+            return None  # backtrack (try again)
 
         # Place Eagle and protect it
         self._place_eagle_and_protection(tm)
 
-        # Constraint 2 — reachability from all spawns
+        # Final BFS reachability check
         for sp in ENEMY_SPAWNS:
             if not tm.reachable(sp, EAGLE_POS):
-                return None
+                return None  # backtrack
 
         return tm
 

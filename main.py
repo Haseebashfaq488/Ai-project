@@ -24,8 +24,9 @@ from renderer  import Renderer
 # ─── Level enemy pools (size = difficulty) ───────────────────────────────────
 
 LEVEL_POOLS = {
-    1: [TANK_BASIC] * 8 + [TANK_FAST] * 4,          # 12 enemies — easy
+    1: [TANK_BASIC] * 10 + [TANK_FAST] * 2,          # 12 enemies — easier start
     2: [TANK_BASIC] * 4 + [TANK_FAST] * 6 + [TANK_ARMOR] * 4,  # 14 — medium
+    3: [TANK_BOSS],  # Boss level
 }
 
 
@@ -40,7 +41,7 @@ def _near_eagle(x, y):
     return abs(x - ex) <= 1 and abs(y - ey) <= 1
 
 
-# ─── Game ─────────────────────────────────────────────────────────────────────
+# ─── Game ──────────────────────────────────── ─────────────────────────────────
 
 class Game:
     def __init__(self):
@@ -83,7 +84,7 @@ class Game:
             if any(e.x == sx and e.y == sy and e.alive for e in self.enemies):
                 continue
             tank_type = self.enemy_pool.pop(0)
-            self.enemies.append(make_enemy(tank_type, sx, sy))
+            self.enemies.append(make_enemy(tank_type, sx, sy, level=self.level))
             return
 
     # ── Collision resolution ───────────────────────────────────────────────
@@ -112,6 +113,7 @@ class Game:
             if (bx, by) == EAGLE_POS:
                 b.alive = False
                 self.game_over = True
+                self.renderer.add_explosion(bx * TILE_SIZE + 12, by * TILE_SIZE + 12, RED, 50)
                 return
 
             # ── Enemy bullet hits player ─────────────────────────────────
@@ -120,6 +122,7 @@ class Game:
                     and bx == self.player.x
                     and by == self.player.y):
                 b.alive = False
+                self.renderer.add_explosion(bx * TILE_SIZE + 12, by * TILE_SIZE + 12, YELLOW, 20)
                 self._handle_player_hit()
                 continue
 
@@ -129,6 +132,7 @@ class Game:
                 for e in self.enemies:
                     if e.alive and bx == e.x and by == e.y:
                         b.alive = False
+                        self.renderer.add_explosion(bx * TILE_SIZE + 12, by * TILE_SIZE + 12, ORANGE, 25)
                         e.take_hit()   # reduces HP; sets alive=False if hp<=0
                         break
 
@@ -200,20 +204,22 @@ class Game:
                     else:
                         self.player.respawn()
 
+            occupied_positions = {(self.player.x, self.player.y)} | {(e.x, e.y) for e in self.enemies if e.alive}
+
             # ── Update player ──────────────────────────────────────────────
             if self.player.alive:
-                self.player.update(self.tilemap, shoot=shoot_this_frame)
+                self.player.update(self.tilemap, shoot=shoot_this_frame, occupied=occupied_positions)
 
             # ── Spawn enemies ──────────────────────────────────────────────
             self.spawn_timer -= 1
             if self.spawn_timer <= 0 and self.enemy_pool:
                 self._spawn_enemy()
-                self.spawn_timer = FPS * 3   # new enemy every 3 seconds
+                self.spawn_timer = FPS * 5   # new enemy every 5 seconds
 
             # ── Update enemies ─────────────────────────────────────────────
             for e in self.enemies:
                 if e.alive:
-                    e.update(self.tilemap, self.player)
+                    e.update(self.tilemap, self.player, occupied=occupied_positions)
 
             # ── Move bullets ───────────────────────────────────────────────
             all_bullets = (
@@ -222,16 +228,10 @@ class Game:
             )
             for b in all_bullets:
                 if b.alive:
-                    b.update(self.tilemap)
+                    b.update(self.tilemap, self.player, self.enemies)
 
             # ── Resolve all collisions ─────────────────────────────────────
             self._resolve_collisions()
-
-            # ── Prune dead objects ─────────────────────────────────────────
-            self.player.bullets = [b for b in self.player.bullets if b.alive]
-            for e in self.enemies:
-                e.bullets = [b for b in e.bullets if b.alive]
-            self.enemies = [e for e in self.enemies if e.alive]
 
             # ── Win / level-advance check ──────────────────────────────────
             kills_left = len(self.enemy_pool) + len([e for e in self.enemies if e.alive])
@@ -246,6 +246,12 @@ class Game:
                 self.tilemap, self.player, self.enemies, all_bullets,
                 self.level, kills_left
             )
+
+            # ── Prune dead objects after rendering so hit bullets remain visible
+            self.player.bullets = [b for b in self.player.bullets if b.alive]
+            for e in self.enemies:
+                e.bullets = [b for b in e.bullets if b.alive]
+            self.enemies = [e for e in self.enemies if e.alive]
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
