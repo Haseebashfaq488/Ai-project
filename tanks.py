@@ -36,8 +36,13 @@ class Tank:
             self.alive = False
         return self.alive
 
-    def try_move(self, tilemap, dx, dy):
+    def try_move(self, tilemap, dx, dy, occupied=None):
         nx, ny = self.x + dx, self.y + dy
+        if occupied is None:
+            occupied = set()
+        if (nx, ny) in occupied:
+            self.direction = (dx, dy)
+            return False
         if tilemap.is_passable(nx, ny):
             self.x, self.y = nx, ny
             self.direction  = (dx, dy)
@@ -47,7 +52,9 @@ class Tank:
 
     def try_shoot(self):
         if self._fire_cd <= 0:
-            # Only one bullet at a time per tank (for player; enemies can stack)
+            alive_bullets = [b for b in self.bullets if b.alive]
+            if alive_bullets:
+                return None
             bx = self.x + self.direction[0]
             by = self.y + self.direction[1]
             b  = Bullet(bx, by, self.direction, self.tank_type)
@@ -92,18 +99,18 @@ class PlayerTank(Tank):
     def __init__(self, x, y):
         super().__init__(x, y, TANK_PLAYER)
         self.direction  = UP
-        self.fire_rate  = 15          # ticks between shots
+        self.fire_rate  = 64          # ticks between shots (scaled for 60 FPS)
         self.lives      = 3           # 3 lives as requested
         self._pending   = None        # direction set this frame only
 
     def set_direction(self, dx, dy):
         self._pending = (dx, dy)
 
-    def update(self, tilemap, shoot=False):
+    def update(self, tilemap, shoot=False, occupied=None):
         self.tick_cooldowns()
-        # Only move if a direction was pressed THIS frame (pending is cleared after use)
-        if self.can_move() and self._pending is not None:
-            self.try_move(tilemap, *self._pending)
+        # Player cannot move and shoot in the same tick
+        if not shoot and self.can_move() and self._pending is not None:
+            self.try_move(tilemap, *self._pending, occupied=occupied)
             self.reset_move_tick()
         # Clear pending so tank stops when key released
         self._pending = None
@@ -129,25 +136,31 @@ class BasicTank(Tank):
     Movement: follow BFS path toward Eagle; re-plan every 5s or when blocked.
     """
 
-    def __init__(self, x, y):
+    def __init__(self, x, y, level=1):
         super().__init__(x, y, TANK_BASIC)
         self.direction  = DOWN
-        self.fire_rate  = 60   # fires every 3 seconds at 20 FPS
+        self.fire_rate  = 600 if level == 1 else 340
+        self.speed      = SPEED[TANK_BASIC] + (8 if level == 1 else 0)
         self._path      = []
         self._replan_cd = 0
+        self._sight_ticks = 0
 
-    def update(self, tilemap, player):
+    def update(self, tilemap, player, occupied=None):
         self.tick_cooldowns()
 
         # Reflex rule — shoot player if visible
         if self.line_of_sight(tilemap, player.x, player.y):
-            dx = player.x - self.x
-            dy = player.y - self.y
-            if dx != 0:
-                self.direction = (1 if dx > 0 else -1, 0)
-            else:
-                self.direction = (0, 1 if dy > 0 else -1)
-            self.try_shoot()
+            self._sight_ticks += 1
+            if self._sight_ticks >= 4:
+                dx = player.x - self.x
+                dy = player.y - self.y
+                if dx != 0:
+                    self.direction = (1 if dx > 0 else -1, 0)
+                else:
+                    self.direction = (0, 1 if dy > 0 else -1)
+                self.try_shoot()
+        else:
+            self._sight_ticks = 0
 
         # Replan timer
         self._replan_cd -= 1
@@ -167,7 +180,7 @@ class BasicTank(Tank):
         if self.can_move():
             if self._path:
                 nx, ny = self._path[0]
-                if self.try_move(tilemap, nx - self.x, ny - self.y):
+                if self.try_move(tilemap, nx - self.x, ny - self.y, occupied=occupied):
                     self._path.pop(0)
                 else:
                     # Blocked by something other than brick — replan
@@ -175,10 +188,8 @@ class BasicTank(Tank):
             else:
                 # Random fallback
                 d = random.choice(DIRS)
-                self.try_move(tilemap, *d)
+                self.try_move(tilemap, *d, occupied=occupied)
             self.reset_move_tick()
-
-
 # ─── Fast Tank (Goal-Based + Greedy Best-First) ───────────────────────────────
 
 class FastTank(Tank):
@@ -188,12 +199,13 @@ class FastTank(Tank):
     Ignores player entirely.
     """
 
-    def __init__(self, x, y):
+    def __init__(self, x, y, level=1):
         super().__init__(x, y, TANK_FAST)
         self.direction = DOWN
-        self.fire_rate = 30   # fires every 1.5s at 20 FPS
+        self.fire_rate = 250 if level == 1 else 130   # slower on level 1
+        self.speed     = max(1, SPEED[TANK_FAST] - 4)
 
-    def update(self, tilemap, player):
+    def update(self, tilemap, player, occupied=None):
         self.tick_cooldowns()
 
         if self.can_move():
@@ -215,7 +227,7 @@ class FastTank(Tank):
                         best_h, best_tile = h, (dx, dy)
 
             if best_tile:
-                self.try_move(tilemap, *best_tile)
+                self.try_move(tilemap, *best_tile, occupied=occupied)
             self.reset_move_tick()
 
 
@@ -227,10 +239,10 @@ class ArmorTank(Tank):
     A* for navigation; retreats to steel cover on 3rd hit.
     """
 
-    def __init__(self, x, y):
+    def __init__(self, x, y, level=1):
         super().__init__(x, y, TANK_ARMOR)
         self.direction   = DOWN
-        self.fire_rate   = 40   # fires every 2s at 20 FPS
+        self.fire_rate   = 170   # fires every ~2.8s at 60 FPS
         self._path       = []
         self._state      = "attack"    # "attack" | "retreat" | "cover"
         self._cover_cd   = 0
@@ -259,7 +271,7 @@ class ArmorTank(Tank):
                     queue.append(((nx, ny), path + [(nx, ny)]))
         return []
 
-    def update(self, tilemap, player):
+    def update(self, tilemap, player, occupied=None):
         self.tick_cooldowns()
 
         # Shoot player if in line-of-sight
@@ -276,7 +288,7 @@ class ArmorTank(Tank):
                     self._state = "attack"
             if self._path and self.can_move():
                 nx, ny = self._path[0]
-                if self.try_move(tilemap, nx - self.x, ny - self.y):
+                if self.try_move(tilemap, nx - self.x, ny - self.y, occupied=occupied):
                     self._path.pop(0)
                     if not self._path:
                         self._state  = "cover"
@@ -303,20 +315,153 @@ class ArmorTank(Tank):
 
             if self.can_move() and self._path:
                 nx, ny = self._path[0]
-                if self.try_move(tilemap, nx - self.x, ny - self.y):
+                if self.try_move(tilemap, nx - self.x, ny - self.y, occupied=occupied):
                     self._path.pop(0)
                 else:
                     self._path = []   # replan next tick
                 self.reset_move_tick()
 
 
+# ─── Boss Tank (Minimax + Alpha-Beta) ─────────────────────────────────────────
+
+class BossTank(Tank):
+    """
+    Boss Tank using Minimax with Alpha-Beta Pruning.
+    Simulates player responses to choose optimal actions.
+    Depth varies by HP: 10-7:2, 6-4:3, 3-1:4
+    """
+
+    def __init__(self, x, y):
+        super().__init__(x, y, TANK_BOSS)
+        self.direction = DOWN
+        self.fire_rate = 130  # fires every ~2s
+        self.actions = ['up', 'down', 'left', 'right', 'shoot']
+        self.dir_map = {'up': UP, 'down': DOWN, 'left': LEFT, 'right': RIGHT}
+
+    def get_depth(self):
+        if self.hp >= 7: return 2
+        elif self.hp >= 4: return 3
+        else: return 4
+
+    def update(self, tilemap, player, occupied=None):
+        self.tick_cooldowns()
+
+        # Use minimax to choose best action
+        best_action = self._choose_action(tilemap, player)
+        
+        if best_action == 'shoot':
+            # Check line of sight
+            if self.line_of_sight(tilemap, player.x, player.y):
+                dx = player.x - self.x
+                dy = player.y - self.y
+                self.direction = (1 if dx > 0 else -1, 0) if dx != 0 else (0, 1 if dy > 0 else -1)
+                self.try_shoot()
+        else:
+            # Move
+            dx, dy = self.dir_map[best_action]
+            if self.can_move():
+                self.try_move(tilemap, dx, dy, occupied=occupied)
+                self.reset_move_tick()
+
+    def _choose_action(self, tilemap, player):
+        """Choose action using minimax."""
+        import math
+        
+        def evaluate_state(boss_pos, boss_hp, player_pos, player_hp):
+            if boss_hp <= 0: return -1000
+            if player_hp <= 0: return 1000
+            # Heuristic: HP difference + distance
+            hp_diff = boss_hp - player_hp
+            dist = abs(boss_pos[0] - player_pos[0]) + abs(boss_pos[1] - player_pos[1])
+            return hp_diff * 10 - dist
+        
+        def simulate_action(state, action, is_boss):
+            boss_pos, boss_hp, player_pos, player_hp = state
+            if action == 'shoot':
+                if self._line_of_sight_sim(tilemap, boss_pos if is_boss else player_pos, player_pos if is_boss else boss_pos):
+                    if is_boss:
+                        player_hp -= 1
+                    else:
+                        boss_hp -= 1
+            else:
+                dx, dy = self.dir_map[action]
+                new_pos = (boss_pos[0] + dx, boss_pos[1] + dy) if is_boss else (player_pos[0] + dx, player_pos[1] + dy)
+                if tilemap.is_passable(*new_pos):
+                    if is_boss:
+                        boss_pos = new_pos
+                    else:
+                        player_pos = new_pos
+            return (boss_pos, boss_hp, player_pos, player_hp)
+        
+        def minimax(state, depth, alpha, beta, maximizing):
+            if depth == 0 or state[1] <= 0 or state[3] <= 0:
+                return evaluate_state(*state)
+            
+            if maximizing:  # boss turn
+                max_eval = -math.inf
+                for action in self.actions:
+                    new_state = simulate_action(state, action, True)
+                    eval = minimax(new_state, depth - 1, alpha, beta, False)
+                    max_eval = max(max_eval, eval)
+                    alpha = max(alpha, eval)
+                    if beta <= alpha:
+                        break
+                return max_eval
+            else:  # player turn
+                min_eval = math.inf
+                for action in self.actions:
+                    new_state = simulate_action(state, action, False)
+                    eval = minimax(new_state, depth - 1, alpha, beta, True)
+                    min_eval = min(min_eval, eval)
+                    beta = min(beta, eval)
+                    if beta <= alpha:
+                        break
+                return min_eval
+        
+        # Current state
+        state = ((self.x, self.y), self.hp, (player.x, player.y), player.hp)
+        depth = self.get_depth()
+        
+        best_eval = -math.inf
+        best_action = 'shoot'  # default
+        
+        for action in self.actions:
+            new_state = simulate_action(state, action, True)
+            eval = minimax(new_state, depth - 1, -math.inf, math.inf, False)
+            if eval > best_eval:
+                best_eval = eval
+                best_action = action
+        
+        return best_action
+
+    def _line_of_sight_sim(self, tilemap, start, end):
+        """Simplified line of sight for simulation."""
+        sx, sy = start
+        ex, ey = end
+        if sx == ex:
+            miny, maxy = sorted([sy, ey])
+            for y in range(miny + 1, maxy):
+                if tilemap.get(sx, y) in (BRICK, STEEL, WATER):
+                    return False
+            return True
+        elif sy == ey:
+            minx, maxx = sorted([sx, ex])
+            for x in range(minx + 1, maxx):
+                if tilemap.get(x, sy) in (BRICK, STEEL, WATER):
+                    return False
+            return True
+        return False
+
+
 # ─── Factory ──────────────────────────────────────────────────────────────────
 
-def make_enemy(tank_type, x, y):
+def make_enemy(tank_type, x, y, level=1):
     if tank_type == TANK_BASIC:
-        return BasicTank(x, y)
+        return BasicTank(x, y, level=level)
     if tank_type == TANK_FAST:
-        return FastTank(x, y)
+        return FastTank(x, y, level=level)
     if tank_type == TANK_ARMOR:
-        return ArmorTank(x, y)
+        return ArmorTank(x, y, level=level)
+    if tank_type == TANK_BOSS:
+        return BossTank(x, y)
     raise ValueError(f"Unknown tank type: {tank_type}")
