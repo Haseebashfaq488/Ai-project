@@ -140,13 +140,22 @@ class Renderer:
         T      = TILE_SIZE
         body_c, dark_c = color_pair
         
-        # Smooth exponential interpolation without touching game logic
-        if not hasattr(tank, 'visual_x') or abs(tank.x - tank.visual_x) > 2 or abs(tank.y - tank.visual_y) > 2:
+        # Smooth linear interpolation for continuous visual movement
+        if not hasattr(tank, 'visual_x') or abs(tank.x - tank.visual_x) > 1.5 or abs(tank.y - tank.visual_y) > 1.5:
             tank.visual_x = float(tank.x)
             tank.visual_y = float(tank.y)
             
-        tank.visual_x += (tank.x - tank.visual_x) * 0.3
-        tank.visual_y += (tank.y - tank.visual_y) * 0.3
+        step = 1.0 / max(1.0, float(tank.speed) * 0.85)
+        
+        if tank.visual_x < tank.x:
+            tank.visual_x = min(float(tank.x), tank.visual_x + step)
+        elif tank.visual_x > tank.x:
+            tank.visual_x = max(float(tank.x), tank.visual_x - step)
+            
+        if tank.visual_y < tank.y:
+            tank.visual_y = min(float(tank.y), tank.visual_y + step)
+        elif tank.visual_y > tank.y:
+            tank.visual_y = max(float(tank.y), tank.visual_y - step)
 
         rx = int(tank.visual_x * T)
         ry = int(tank.visual_y * T)

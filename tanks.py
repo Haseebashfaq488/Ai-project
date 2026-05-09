@@ -139,7 +139,7 @@ class BasicTank(Tank):
     def __init__(self, x, y, level=1):
         super().__init__(x, y, TANK_BASIC)
         self.direction  = DOWN
-        self.fire_rate  = 600 if level == 1 else 340
+        self.fire_rate  = 120 if level == 1 else 90
         self.speed      = SPEED[TANK_BASIC] + (8 if level == 1 else 0)
         self._path      = []
         self._replan_cd = 0
@@ -151,7 +151,7 @@ class BasicTank(Tank):
         # Reflex rule — shoot player if visible
         if self.line_of_sight(tilemap, player.x, player.y):
             self._sight_ticks += 1
-            if self._sight_ticks >= 4:
+            if self._sight_ticks >= 60:
                 dx = player.x - self.x
                 dy = player.y - self.y
                 if dx != 0:
@@ -185,6 +185,7 @@ class BasicTank(Tank):
                 else:
                     # Blocked by something other than brick — replan
                     self._path = []
+                    self.try_move(tilemap, *random.choice(DIRS), occupied=occupied)
             else:
                 # Random fallback
                 d = random.choice(DIRS)
@@ -195,39 +196,43 @@ class BasicTank(Tank):
 class FastTank(Tank):
     """
     Goal-Based Agent — single goal: destroy Eagle.
-    Greedy best-first: always steps to neighbour with lowest Manhattan dist to Eagle.
+    Greedy best-first: uses greedy_path to navigate toward Eagle.
     Ignores player entirely.
     """
 
     def __init__(self, x, y, level=1):
         super().__init__(x, y, TANK_FAST)
         self.direction = DOWN
-        self.fire_rate = 250 if level == 1 else 130   # slower on level 1
+        self.fire_rate = 100 if level == 1 else 80   # slower on level 1
         self.speed     = max(1, SPEED[TANK_FAST] - 4)
+        self._path     = []
+        self._replan_cd = 0
 
     def update(self, tilemap, player, occupied=None):
         self.tick_cooldowns()
 
-        if self.can_move():
-            best_tile = None
-            best_h    = 999
-            gx, gy    = EAGLE_POS
-            for dx, dy in DIRS:
-                nx, ny = self.x + dx, self.y + dy
-                t      = tilemap.get(nx, ny)
-                if t == BRICK:
-                    # Shoot it down — don't detour
-                    self.direction = (dx, dy)
-                    self.try_shoot()
-                    self.reset_move_tick()
-                    return
-                if tilemap.is_passable(nx, ny):
-                    h = abs(nx - gx) + abs(ny - gy)
-                    if h < best_h:
-                        best_h, best_tile = h, (dx, dy)
+        self._replan_cd -= 1
+        if self._replan_cd <= 0 or not self._path:
+            self._path = tilemap.greedy_path((self.x, self.y), EAGLE_POS)
+            self._replan_cd = FPS * 5
 
-            if best_tile:
-                self.try_move(tilemap, *best_tile, occupied=occupied)
+        if self._path:
+            nx, ny = self._path[0]
+            if tilemap.get(nx, ny) == BRICK:
+                self.direction = (nx - self.x, ny - self.y)
+                self.try_shoot()
+                return
+
+        if self.can_move():
+            if self._path:
+                nx, ny = self._path[0]
+                if self.try_move(tilemap, nx - self.x, ny - self.y, occupied=occupied):
+                    self._path.pop(0)
+                else:
+                    self._path = []
+                    self.try_move(tilemap, *random.choice(DIRS), occupied=occupied)
+            else:
+                self.try_move(tilemap, *random.choice(DIRS), occupied=occupied)
             self.reset_move_tick()
 
 
@@ -242,10 +247,11 @@ class ArmorTank(Tank):
     def __init__(self, x, y, level=1):
         super().__init__(x, y, TANK_ARMOR)
         self.direction   = DOWN
-        self.fire_rate   = 170   # fires every ~2.8s at 60 FPS
+        self.fire_rate   = 90   # fires every ~1.5s at 60 FPS
         self._path       = []
         self._state      = "attack"    # "attack" | "retreat" | "cover"
         self._cover_cd   = 0
+        self._sight_ticks = 0
 
     def take_hit(self):
         super().take_hit()
@@ -276,10 +282,14 @@ class ArmorTank(Tank):
 
         # Shoot player if in line-of-sight
         if self.line_of_sight(tilemap, player.x, player.y):
-            dx = player.x - self.x
-            dy = player.y - self.y
-            self.direction = (1 if dx > 0 else -1, 0) if dx != 0 else (0, 1 if dy > 0 else -1)
-            self.try_shoot()
+            self._sight_ticks += 1
+            if self._sight_ticks >= 60:
+                dx = player.x - self.x
+                dy = player.y - self.y
+                self.direction = (1 if dx > 0 else -1, 0) if dx != 0 else (0, 1 if dy > 0 else -1)
+                self.try_shoot()
+        else:
+            self._sight_ticks = 0
 
         if self._state == "retreat":
             if not self._path:
@@ -319,6 +329,7 @@ class ArmorTank(Tank):
                     self._path.pop(0)
                 else:
                     self._path = []   # replan next tick
+                    self.try_move(tilemap, *random.choice(DIRS), occupied=occupied)
                 self.reset_move_tick()
 
 
@@ -334,9 +345,10 @@ class BossTank(Tank):
     def __init__(self, x, y):
         super().__init__(x, y, TANK_BOSS)
         self.direction = DOWN
-        self.fire_rate = 130  # fires every ~2s
+        self.fire_rate = 60  # fires every ~1s
         self.actions = ['up', 'down', 'left', 'right', 'shoot']
         self.dir_map = {'up': UP, 'down': DOWN, 'left': LEFT, 'right': RIGHT}
+        self._sight_ticks = 0
 
     def get_depth(self):
         if self.hp >= 7: return 2
@@ -352,11 +364,16 @@ class BossTank(Tank):
         if best_action == 'shoot':
             # Check line of sight
             if self.line_of_sight(tilemap, player.x, player.y):
-                dx = player.x - self.x
-                dy = player.y - self.y
-                self.direction = (1 if dx > 0 else -1, 0) if dx != 0 else (0, 1 if dy > 0 else -1)
-                self.try_shoot()
+                self._sight_ticks += 1
+                if self._sight_ticks >= 60:
+                    dx = player.x - self.x
+                    dy = player.y - self.y
+                    self.direction = (1 if dx > 0 else -1, 0) if dx != 0 else (0, 1 if dy > 0 else -1)
+                    self.try_shoot()
+            else:
+                self._sight_ticks = 0
         else:
+            self._sight_ticks = 0
             # Move
             dx, dy = self.dir_map[best_action]
             if self.can_move():

@@ -63,7 +63,7 @@ class Tilemap:
                 new_path = path + [(nx, ny)]
                 if (nx, ny) == (gx, gy):
                     return new_path
-                if self.is_passable(nx, ny):
+                if self.is_passable(nx, ny) or self.get(nx, ny) == BRICK:
                     visited.add((nx, ny))
                     queue.append(((nx, ny), new_path))
         return []
@@ -111,6 +111,35 @@ class Tilemap:
                 ng     = g + cost
                 npath  = path + [(nx, ny)]
                 heapq.heappush(open_set, (ng + h(nx, ny), ng, (nx, ny), npath))
+        return []
+
+    def greedy_path(self, start, goal):
+        import heapq
+        open_set = [(abs(start[0] - goal[0]) + abs(start[1] - goal[1]), start, [])]
+        visited = set()
+        
+        while open_set:
+            h_val, (cx, cy), path = heapq.heappop(open_set)
+            if (cx, cy) in visited:
+                continue
+            visited.add((cx, cy))
+            
+            if (cx, cy) == goal:
+                return path
+                
+            for dx, dy in DIRS:
+                nx, ny = cx + dx, cy + dy
+                if not (0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE):
+                    continue
+                if (nx, ny) in visited:
+                    continue
+                if (nx, ny) == goal:
+                    return path + [(nx, ny)]
+                
+                tile = self.get(nx, ny)
+                if tile in (EMPTY, FOREST, BRICK):
+                    h_next = abs(nx - goal[0]) + abs(ny - goal[1])
+                    heapq.heappush(open_set, (h_next, (nx, ny), path + [(nx, ny)]))
         return []
 
 

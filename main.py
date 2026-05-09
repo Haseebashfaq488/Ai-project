@@ -24,8 +24,8 @@ from renderer  import Renderer
 # ─── Level enemy pools (size = difficulty) ───────────────────────────────────
 
 LEVEL_POOLS = {
-    1: [TANK_BASIC] * 10 + [TANK_FAST] * 2,          # 12 enemies — easier start
-    2: [TANK_BASIC] * 4 + [TANK_FAST] * 6 + [TANK_ARMOR] * 4,  # 14 — medium
+    1: [TANK_BASIC] * 5 + [TANK_FAST] * 4,          # 9 enemies — easier start
+    2: [TANK_BASIC] * 2 + [TANK_FAST] * 5 + [TANK_ARMOR] * 5,  # 12 — medium
     3: [TANK_BOSS],  # Boss level
 }
 
@@ -123,7 +123,7 @@ class Game:
                     and by == self.player.y):
                 b.alive = False
                 self.renderer.add_explosion(bx * TILE_SIZE + 12, by * TILE_SIZE + 12, YELLOW, 20)
-                self._handle_player_hit()
+                self.player.take_hit()
                 continue
 
             # ── Any bullet hits an enemy ─────────────────────────────────
@@ -148,10 +148,7 @@ class Game:
                 self.game_over = True
                 return
 
-    def _handle_player_hit(self):
-        self.player.alive   = False
-        self.player.lives  -= 1
-        self._respawn_timer = FPS * 2   # 2-second respawn pause
+    # _handle_player_hit was removed as health/lives are verified globally in the run loop now.
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
@@ -221,6 +218,8 @@ class Game:
                 if e.alive:
                     e.update(self.tilemap, self.player, occupied=occupied_positions)
 
+            player_was_alive = self.player.alive
+
             # ── Move bullets ───────────────────────────────────────────────
             all_bullets = (
                 self.player.bullets +
@@ -232,6 +231,11 @@ class Game:
 
             # ── Resolve all collisions ─────────────────────────────────────
             self._resolve_collisions()
+
+            # ── Check if Player Died this frame ─────────────────────────────
+            if player_was_alive and not self.player.alive:
+                self.player.lives -= 1
+                self._respawn_timer = FPS * 2
 
             # ── Win / level-advance check ──────────────────────────────────
             kills_left = len(self.enemy_pool) + len([e for e in self.enemies if e.alive])
